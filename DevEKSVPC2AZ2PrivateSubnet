@@ -1,0 +1,393 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS EKS Dev-Env - 2 AZ, Private 2 subnets, Public 1 subnets, 1 IGW, 1 NATGateways, Public RT, 2 Private RT, Security Group for ControlPlane '
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Worker Network Configuration"
+        Parameters:
+          - VpcBlock
+          - AvailabilityZoneA
+          - AvailabilityZoneC
+          - PublicSubnetABlock
+          - PrivateSubnetABlock
+          - PrivateSubnetCBlock
+
+Parameters:
+
+  VpcBlock:
+    Type: String
+    Default: 10.10.0.0/16
+    Description: The CIDR range for the VPC. This should be a valid private (RFC 1918) CIDR range.
+
+  AvailabilityZoneA:
+    Description: "Choose AZ1 for your VPC."
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: "ap-northeast-2a"
+
+  AvailabilityZoneC:
+    Description: "Choose AZ2 for your VPC."
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: "ap-northeast-2c"
+
+  PublicSubnetABlock:
+    Type: String
+    Default: 10.10.0.0/20
+    Description: CidrBlock for public subnet A within the VPC  
+
+  PrivateSubnetABlock:
+    Type: String
+    Default: 10.10.32.0/20
+    Description: CidrBlock for private subnet A within the VPC
+
+  PrivateSubnetCBlock:
+    Type: String
+    Default: 10.10.48.0/20
+    Description: CidrBlock for private subnet C within the VPC
+
+
+Resources:
+
+#####################
+# Create-VPC : VPC #
+#####################
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:  !Ref VpcBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}'
+
+########################################################
+# Create-InternetGateway: 
+########################################################
+
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+
+########################################################
+# Attach - VPC Gateway 
+########################################################
+
+  VPCGatewayAttachment:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+########################################################
+# Create-Public-Subnet: PublicSubnetA, C
+########################################################
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Public Subnet A
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetABlock
+      AvailabilityZone: !Ref AvailabilityZoneA
+      MapPublicIpOnLaunch: "true"
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PublicSubnet-A"
+      - Key: kubernetes.io/role/elb
+        Value: 1
+
+#####################################################################
+# Create-Public-RouteTable:
+#####################################################################
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: Public Subnets
+      - Key: Network
+        Value: PublicRT
+
+################################################################################################
+# Associate-Public-RouteTable: VPC_Private_Subnet_a,c Accsociate VPC_Private_RouteTable #
+################################################################################################
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+#  PublicSubnet04RouteTableAssociation:
+#    Type: AWS::EC2::SubnetRouteTableAssociation
+#    Properties:
+#      SubnetId: !Ref PublicSubnet04
+#      RouteTableId: !Ref PublicRouteTabl#e
+
+################################################################################################
+# Create Public Routing Table
+################################################################################################
+  PublicRoute:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+################################################################################################
+# Create-NATGateway: NATGATEWAYAZA
+################################################################################################
+  NatGatewayAZA:
+    DependsOn:
+    - NatGatewayEIPAZA
+    - PublicSubnetA
+    - VPCGatewayAttachment
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt 'NatGatewayEIPAZA.AllocationId'
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-NatGatewayAZA'
+      
+
+  NatGatewayEIPAZA:
+    DependsOn:
+    - VPCGatewayAttachment
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+
+########################################################
+# Create-Security-Group : ControlPlane
+########################################################
+  ControlPlaneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Cluster communication with worker nodes
+      VpcId: !Ref VPC
+
+########################################################
+# Create-Security-Group : Session Manager
+########################################################
+  SSMSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Open-up ports for HTTP/S from All network
+      GroupName: SSMSG
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          FromPort: "80"
+          ToPort: "80"
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          FromPort: "443"
+          ToPort: "443"
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-SSMSG'
+########################################################
+# Create-Private-Subnet: PrivateSubnetA, C
+########################################################
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Private Subnet A
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetABlock
+      AvailabilityZone: !Ref AvailabilityZoneA
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PrivateSubnet-A"
+      - Key: kubernetes.io/role/internal-elb
+        Value: 1
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Private Subnet C
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetCBlock
+      AvailabilityZone: !Ref AvailabilityZoneC
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-PrivateSubnet-C"
+      - Key: kubernetes.io/role/internal-elb
+        Value: 1
+
+#####################################################################
+# Create-Private-RouteTable: PrivateRT-A,C
+#####################################################################
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: Private Subnet AZ-A
+      - Key: Network
+        Value: PrivateRT-A
+
+  PrivateRouteTableC:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: Private Subnet AZ-C
+      - Key: Network
+        Value: PrivateRT-C
+       
+################################################################################################
+# Associate-Private-RouteTable: VPC_Private_Subnet_a,c Accsociate VPC_Private_RouteTable #
+################################################################################################
+
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetC
+      RouteTableId: !Ref PrivateRouteTableC
+
+################################################################################################
+# Add Prviate Routing Table
+################################################################################################
+
+  PrivateRouteA:
+    DependsOn:
+    - VPCGatewayAttachment
+    - NatGatewayAZA
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayAZA
+
+  PrivateRouteC:
+    DependsOn:
+    - VPCGatewayAttachment
+    - NatGatewayAZA
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableC
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayAZA
+
+########################################################
+# Create-TGW-Subnet: TGWSubnet01
+########################################################
+
+  # TGWSubnet01:
+  #  Type: AWS::EC2::Subnet
+  #  Metadata:
+  #    Comment: TGW Subnet 01
+  #  Properties:
+  #    VpcId: !Ref VPC
+  #    CidrBlock: !Ref TGWSubnet01Block
+  #    AvailabilityZone: !Ref AvailabilityZoneA
+  #    Tags:
+  #    - Key: Name
+  #      Value: !Sub "${AWS::StackName}-TGWSubnet01"
+  #    - Key: kubernetes.io/role/internal-elb
+  #      Value: 1
+
+#####################################################################
+# Create-TGW-RouteTable: TGWRT01
+#####################################################################
+ # TGWRouteTable01:
+ #   Type: AWS::EC2::RouteTable
+ #   Properties:
+ #     VpcId: !Ref VPC
+ #     Tags:
+ #     - Key: Name
+ #       Value: TGW Subnet AZ1
+ #     - Key: Network
+ #       Value: TGWRT01
+    
+################################################################################################
+# Associate-TGW-RouteTable: VPC_TGW_Subnet_a,c Accsociate VPC_TGW_RouteTable #
+################################################################################################
+
+ # TGWSubnet01RouteTableAssociation:
+ #   Type: AWS::EC2::SubnetRouteTableAssociation
+ #   Properties:
+ #     SubnetId: !Ref TGWSubnet01
+ #     RouteTableId: !Ref TGWRouteTable01
+
+######################################################################
+# Create-System-Manager-Endpoint: Create VPC SystemManager Endpoint #
+######################################################################
+
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: True
+      SubnetIds: 
+        - Ref: PrivateSubnetA
+        - Ref: PrivateSubnetC
+      SecurityGroupIds:
+        - Ref: SSMSG
+
+  SSMMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: True
+      SubnetIds: 
+        - Ref: PrivateSubnetA
+        - Ref: PrivateSubnetC
+      SecurityGroupIds:
+        - Ref: SSMSG
+
+Outputs:
+
+#  SubnetIds:
+#    Description: Subnets IDs in the VPC
+#    Value: !Join [ ",", [ !Ref PublicSubnet01, !Ref PublicSubnet02, !Ref PublicSubnet03, !Ref PrivateSubnet01, !Ref PrivateSubnet02, !Ref PrivateSubnet03 ] ]
+
+  VpcId:
+    Description: The VPC Id
+    Value: !Ref VPC
+
+  PublicSubnetA:
+    Description: PublicSubnet-A ID in the VPC
+    Value: !Ref PublicSubnetA
+
+#  PublicSubnet03:
+#    Description: PublicSubnet04 ID in the VPC
+#    Value: !Ref PublicSubnet04
+#
+
+  PrivateSubnetA:
+    Description: PrivateSubnet-A ID in the VPC
+    Value: !Ref PrivateSubnetA
+
+  PrivateSubnetC:
+    Description: PrivateSubnet-C ID in the VPC
+    Value: !Ref PrivateSubnetC
+
+  SecurityGroups:
+    Description: Security group for the cluster control plane communication with worker nodes
+    Value: !Join [ ",", [ !Ref ControlPlaneSecurityGroup ] ]
+
