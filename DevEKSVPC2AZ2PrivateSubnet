@@ -19,7 +19,7 @@ Parameters:
 
   VpcBlock:
     Type: String
-    Default: 10.10.0.0/16
+    Default: 10.100.0.0/16
     Description: The CIDR range for the VPC. This should be a valid private (RFC 1918) CIDR range.
 
   AvailabilityZoneA:
@@ -34,17 +34,17 @@ Parameters:
 
   PublicSubnetABlock:
     Type: String
-    Default: 10.10.0.0/20
+    Default: 10.100.0.0/20
     Description: CidrBlock for public subnet A within the VPC  
 
   PrivateSubnetABlock:
     Type: String
-    Default: 10.10.32.0/20
+    Default: 10.100.32.0/20
     Description: CidrBlock for private subnet A within the VPC
 
   PrivateSubnetCBlock:
     Type: String
-    Default: 10.10.48.0/20
+    Default: 10.100.48.0/20
     Description: CidrBlock for private subnet C within the VPC
 
 

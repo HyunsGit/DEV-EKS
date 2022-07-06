@@ -145,7 +145,7 @@ Resources:
       SubnetId: !Ref PublicSubnet-A
       RouteTableId: !Ref PublicRouteTable
 
-  PublicSubnet-A-RouteTableAssociation:
+  PublicSubnet-C-RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet-C
